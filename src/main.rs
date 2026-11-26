@@ -8,7 +8,7 @@ fn main() -> anyhow::Result<()> {
 
     let tokens = lexer::tokenize(&content)?;
 
-    let ast = parser::parse(tokens);
+    let ast = parser::parse(tokens)?;
 
     println!("{ast:?}");
 

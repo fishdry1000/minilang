@@ -6,9 +6,9 @@ pub struct Token {
     pub kind: TokenKind,
 }
 
-impl From<&Token> for PositionedString {
-    fn from(value: &Token) -> Self {
-        value.position.clone()
+impl From<Token> for PositionedString {
+    fn from(value: Token) -> Self {
+        value.position
     }
 }
 
@@ -19,7 +19,7 @@ pub enum TokenKind {
     Const(Const),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Const {
     Int(i64),
     Float(f64),

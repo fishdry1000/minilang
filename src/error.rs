@@ -16,6 +16,8 @@ pub enum LexerError {
 
 #[derive(Debug, Error)]
 pub enum ParserError {
-    #[error("not closed: {0:?}")]
-    NotCloseError(PositionedString),
+    #[error("not closed")]
+    NotClosedError,
+    #[error("extra token after closed: {0:?}")]
+    ExtraTokenAfterClosed(PositionedString),
 }
