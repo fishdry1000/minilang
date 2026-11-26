@@ -20,10 +20,9 @@ fn parse0(iter: &mut impl Iterator<Item = Token>, prev: Option<Token>) -> Result
         let next = match token.kind {
             TokenKind::Open => parse0(iter, Some(token))?,
             TokenKind::Close => {
-                return if let None = prev {
-                    Err(ParserError::ExtraCloseError(token.into()))
-                } else {
-                    Ok(root)
+                return match prev {
+                    None => Err(ParserError::ExtraCloseError(token.into())),
+                    Some(_) => Ok(root),
                 };
             }
             TokenKind::Const(current) => AST::Const(current),
@@ -36,10 +35,9 @@ fn parse0(iter: &mut impl Iterator<Item = Token>, prev: Option<Token>) -> Result
             },
         }
     }
-    if let Some(prev) = prev {
-        Err(ParserError::NotClosedError(prev.into()))
-    } else {
-        Ok(root)
+    match prev {
+        Some(prev) => Err(ParserError::NotClosedError(prev.into())),
+        None => Ok(root),
     }
 }
 
