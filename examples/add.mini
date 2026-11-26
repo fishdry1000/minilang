@@ -4,6 +4,6 @@ square 2 == 4 // true
 
 add: ((Int, Int) -> Int) = (x: Int, y: Int): Int -> (x + y)
 
-add 2 3 // true
+add (2 3) // true
 
 

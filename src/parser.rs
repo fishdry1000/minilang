@@ -11,17 +11,17 @@ pub enum AST {
 }
 
 pub fn parse(code: Vec<Token>) -> Result<AST, ParserError> {
-    parse0(&mut code.into_iter(), true)
+    parse0(&mut code.into_iter(), None)
 }
 
-fn parse0(iter: &mut impl Iterator<Item = Token>, top: bool) -> Result<AST, ParserError> {
+fn parse0(iter: &mut impl Iterator<Item = Token>, prev: Option<Token>) -> Result<AST, ParserError> {
     let mut root = AST::None;
     while let Some(token) = iter.next() {
         let next = match token.kind {
-            TokenKind::Open => parse0(iter, false)?,
+            TokenKind::Open => parse0(iter, Some(token))?,
             TokenKind::Close => {
-                return if top {
-                    Err(ParserError::ExtraTokenAfterClosed(token.into()))
+                return if let None = prev {
+                    Err(ParserError::ExtraCloseError(token.into()))
                 } else {
                     Ok(root)
                 };
@@ -36,10 +36,10 @@ fn parse0(iter: &mut impl Iterator<Item = Token>, top: bool) -> Result<AST, Pars
             },
         }
     }
-    if top {
-        Ok(root)
+    if let Some(prev) = prev {
+        Err(ParserError::NotClosedError(prev.into()))
     } else {
-        Err(ParserError::NotClosedError)
+        Ok(root)
     }
 }
 
