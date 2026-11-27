@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicUsize;
+use std::{collections::HashMap, ops::Range, sync::atomic::AtomicUsize};
 
 use crate::{
     error::TypeError,
@@ -7,18 +7,27 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub enum TypedAST {
+pub struct TypedAST {
+    typing: Type,
+    kind: TypedASTKind,
+    span: Range<usize>,
+}
+
+#[derive(Debug)]
+pub enum TypedASTKind {
     Call {
         left: Box<TypedAST>,
         right: Box<TypedAST>,
     },
-    Transfer {
-        from: Box<TypedAST>,
-        to: Box<TypedAST>,
-    },
-    Const(ConstType),
+    Const(Const),
     Tuple(Vec<TypedAST>),
-    TypeVar(TypeVar),
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum Type {
+    Call { left: ConstType, right: ConstType },
+    Const(ConstType),
+    Tuple(Vec<ConstType>),
 }
 
 impl TypedAST {
@@ -27,54 +36,99 @@ impl TypedAST {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstType {
     Int,
     Float,
     Str,
+    TypeVar(usize),
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub struct TypeVar(usize);
-
 static TYPE_VAR_COUNTER: AtomicUsize = AtomicUsize::new(0);
-impl TypeVar {
-    fn new() -> TypeVar {
-        TypeVar(TYPE_VAR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+impl ConstType {
+    fn new_type_var() -> ConstType {
+        ConstType::TypeVar(TYPE_VAR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
     }
 }
 
 pub fn check(code: &AST) -> TypedAST {
-    build(code)
+    build(code, &mut TypeVarHelper::new())
 }
 
-fn get_builtin_type(name: &str) -> Option<TypedAST> {
+fn get_builtin_type(name: &str, type_vars: &mut TypeVarHelper) -> Option<ConstType> {
     match name {
-        "*" => Some(TypedAST::Transfer {
-            from: Box::new(TypedAST::Tuple(vec![
-                TypedAST::Const(ConstType::Int),
-                TypedAST::Const(ConstType::Int),
-            ])),
-            to: Box::new(TypedAST::Const(ConstType::Int)),
+        "*" => Some({
+            let left = type_vars.link(&Type::Tuple(vec![ConstType::Int, ConstType::Int]));
+            let right = type_vars.link(&Type::Const(ConstType::Int));
+            type_vars.link(&Type::Call { left, right })
         }),
         _ => None,
     }
 }
 
-fn build(code: &AST) -> TypedAST {
-    match &code.value {
-        ASTKind::Call { left, right } => TypedAST::Call {
-            left: Box::new(build(left)),
-            right: Box::new(build(right)),
-        },
-        ASTKind::Const(code) => match code {
-            Const::Int(_) => TypedAST::Const(ConstType::Int),
-            Const::Float(_) => TypedAST::Const(ConstType::Float),
-            Const::Str(_) => TypedAST::Const(ConstType::Str),
-            Const::Name(name) => {
-                get_builtin_type(name).unwrap_or_else(|| TypedAST::TypeVar(TypeVar::new()))
+struct TypeVarHelper {
+    type_vars: Vec<ConstType>,
+    map: HashMap<Type, usize>,
+}
+
+impl TypeVarHelper {
+    fn new() -> Self {
+        TypeVarHelper {
+            type_vars: vec![],
+            map: HashMap::new(),
+        }
+    }
+
+    fn link(&mut self, to: &Type) -> ConstType {
+        match self.map.get(to) {
+            Some(&i) => self.type_vars.get(i).unwrap().clone(),
+            None => {
+                self.map.insert(to.clone(), self.type_vars.len());
+                self.type_vars.push(ConstType::new_type_var());
+                self.type_vars.last().unwrap().clone()
             }
+        }
+    }
+}
+
+fn build(code: &AST, type_vars: &mut TypeVarHelper) -> TypedAST {
+    let AST { span, value } = code;
+    let span = span.clone();
+    match value {
+        ASTKind::Const(sct) => TypedAST {
+            kind: TypedASTKind::Const(sct.clone()),
+            typing: Type::Const(match sct {
+                Const::Int(_) => ConstType::Int,
+                Const::Float(_) => ConstType::Float,
+                Const::Str(_) => ConstType::Str,
+                Const::Name(name) => {
+                    get_builtin_type(name, type_vars).unwrap_or_else(|| ConstType::new_type_var())
+                }
+            }),
+            span,
         },
-        ASTKind::Tuple(asts) => TypedAST::Tuple(asts.iter().map(|e| build(e)).collect()),
+        ASTKind::Call { left, right } => {
+            let left = build(left, type_vars);
+            let right = build(right, type_vars);
+            TypedAST {
+                typing: Type::Call {
+                    left: type_vars.link(&left.typing),
+                    right: type_vars.link(&right.typing),
+                },
+                kind: TypedASTKind::Call {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                },
+                span,
+            }
+        }
+        ASTKind::Tuple(asts) => {
+            let tuple: Vec<TypedAST> = asts.iter().map(|e| build(e, type_vars)).collect();
+            TypedAST {
+                typing: Type::Tuple(tuple.iter().map(|e| type_vars.link(&e.typing)).collect()),
+                kind: TypedASTKind::Tuple(tuple),
+                span,
+            }
+        }
     }
 }

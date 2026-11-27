@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
 
     let typed_ast = type_checker::check(&ast);
 
-    println!("{typed_ast:?}");
+    println!("{typed_ast:#?}");
 
     Ok(())
 }

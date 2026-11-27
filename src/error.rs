@@ -28,7 +28,4 @@ pub enum ParserError {
 }
 
 #[derive(Debug, Error)]
-pub enum TypeError {
-    #[error("not closed: {0:?}")]
-    NotClosedError(Range<usize>),
-}
+pub enum TypeError {}
