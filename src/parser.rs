@@ -1,61 +1,82 @@
+use std::ops::Range;
+
 use crate::{
-    error::ParserError,
+    error::{ParserError, Spanned},
     lexer::{Const, Token, TokenKind},
 };
-#[derive(Debug, PartialEq)]
 
-pub enum AST {
+#[derive(Debug, PartialEq)]
+pub enum ASTKind {
     Call { left: Box<AST>, right: Box<AST> },
     Const(Const),
     Tuple(Vec<AST>),
 }
 
+pub type AST = Spanned<ASTKind>;
+
 pub fn parse(code: Vec<Token>) -> Result<AST, ParserError> {
     parse0(&mut code.into_iter(), None)
 }
 
-fn parse0(iter: &mut impl Iterator<Item = Token>, prev: Option<Token>) -> Result<AST, ParserError> {
+fn parse0(
+    iter: &mut impl Iterator<Item = Token>,
+    open: Option<Range<usize>>,
+) -> Result<AST, ParserError> {
     let mut root = None;
-    let mut building_tuple: Option<Vec<AST>> = None;
-    fn res(root: Option<AST>, building_tuple: Option<Vec<AST>>) -> AST {
-        match building_tuple {
-            Some(mut tup) => {
-                tup.extend(root);
-                AST::Tuple(tup)
-            }
-            None => root.unwrap_or(AST::Const(Const::Unit)),
-        }
-    }
+    let mut tuple = Vec::new();
+    let mut end = 0;
 
-    while let Some(token) = iter.next() {
-        let next = match token.kind {
-            TokenKind::Const(current) => AST::Const(current),
-            TokenKind::Open => parse0(iter, Some(token))?,
+    while let Some(Token { value, span }) = iter.next() {
+        end = span.end;
+        let next = match value {
+            TokenKind::Const(value) => AST {
+                value: ASTKind::Const(value),
+                span,
+            },
+            TokenKind::Open => parse0(iter, Some(span))?,
             TokenKind::Close => {
-                return match prev {
-                    None => Err(ParserError::ExtraCloseError(token.into())),
-                    Some(_) => Ok(res(root, building_tuple)),
-                };
+                let open = open.ok_or(ParserError::ExtraCloseError(span))?;
+                let mut node = finish(root, tuple, end);
+                node.span = open.start..end;
+                return Ok(node);
             }
             TokenKind::Separator => {
-                building_tuple.get_or_insert_with(Vec::new).push(
-                    root.take()
-                        .ok_or_else(|| ParserError::NothingToSeparate(token.into()))?,
-                );
+                tuple.push(root.take().ok_or(ParserError::NothingToSeparate(span))?);
                 continue;
             }
         };
+        end = next.span.end;
         root = Some(match root {
             None => next,
-            Some(left) => AST::Call {
-                left: Box::new(left),
-                right: Box::new(next),
+            Some(left) => AST {
+                span: left.span.start..end,
+                value: ASTKind::Call {
+                    left: Box::new(left),
+                    right: Box::new(next),
+                },
             },
-        })
+        });
     }
-    match prev {
-        Some(prev) => Err(ParserError::NotClosedError(prev.into())),
-        None => Ok(res(root, building_tuple)),
+
+    match open {
+        Some(span) => Err(ParserError::NotClosedError(span)),
+        None => Ok(finish(root, tuple, end)),
+    }
+}
+
+fn finish(root: Option<AST>, mut tuple: Vec<AST>, end: usize) -> AST {
+    if let Some(first) = tuple.first() {
+        let start = first.span.start;
+        tuple.extend(root);
+        AST {
+            value: ASTKind::Tuple(tuple),
+            span: start..end,
+        }
+    } else {
+        root.unwrap_or(AST {
+            value: ASTKind::Tuple(tuple),
+            span: end..end,
+        })
     }
 }
 
@@ -63,85 +84,83 @@ fn parse0(iter: &mut impl Iterator<Item = Token>, prev: Option<Token>) -> Result
 mod tests {
     use super::*;
     use crate::lexer;
+
+    #[derive(Debug, PartialEq)]
+    enum TestAst {
+        Call(Box<TestAst>, Box<TestAst>),
+        Const(Const),
+        Tuple(Vec<TestAst>),
+    }
+
+    impl From<AST> for TestAst {
+        fn from(ast: AST) -> Self {
+            match ast.value {
+                ASTKind::Call { left, right } => call((*left).into(), (*right).into()),
+                ASTKind::Const(value) => Self::Const(value),
+                ASTKind::Tuple(items) => Self::Tuple(items.into_iter().map(Self::from).collect()),
+            }
+        }
+    }
+
+    fn name(value: &str) -> TestAst {
+        TestAst::Const(Const::Name(value.to_owned()))
+    }
+
+    fn tuple(items: Vec<TestAst>) -> TestAst {
+        TestAst::Tuple(items)
+    }
+
+    fn call(left: TestAst, right: TestAst) -> TestAst {
+        TestAst::Call(Box::new(left), Box::new(right))
+    }
+
+    fn parse_source(source: &str) -> TestAst {
+        parse(lexer::tokenize(source).unwrap()).unwrap().into()
+    }
+
     #[test]
     fn parse_basic() {
-        let input = lexer::tokenize("a (b c)").unwrap();
-        let output = AST::Call {
-            left: Box::new(AST::Const(Const::Name(String::from("a")))),
-            right: Box::new(AST::Call {
-                left: Box::new(AST::Const(Const::Name(String::from("b")))),
-                right: Box::new(AST::Const(Const::Name(String::from("c")))),
-            }),
-        };
-        assert_eq!(parse(input).unwrap(), output);
-        let input = lexer::tokenize("").unwrap();
-        let output = AST::Const(Const::Unit);
-        assert_eq!(parse(input).unwrap(), output);
+        assert_eq!(
+            parse_source("a (b c)"),
+            call(name("a"), call(name("b"), name("c"))),
+        );
+        assert_eq!(parse_source(""), tuple(vec![]));
     }
+
     #[test]
     fn parse_comma() {
-        let input = lexer::tokenize("a, b").unwrap();
-        let output = AST::Tuple(vec![
-            AST::Const(Const::Name(String::from("a"))),
-            AST::Const(Const::Name(String::from("b"))),
-        ]);
-        assert_eq!(parse(input).unwrap(), output);
-        let input = lexer::tokenize("(a, b, c)").unwrap();
-        let output = AST::Tuple(vec![
-            AST::Const(Const::Name(String::from("a"))),
-            AST::Const(Const::Name(String::from("b"))),
-            AST::Const(Const::Name(String::from("c"))),
-        ]);
-        assert_eq!(parse(input).unwrap(), output);
-        let input = lexer::tokenize("a, (b, c,)").unwrap();
-        let output = AST::Tuple(vec![
-            AST::Const(Const::Name(String::from("a"))),
-            AST::Tuple(vec![
-                AST::Const(Const::Name(String::from("b"))),
-                AST::Const(Const::Name(String::from("c"))),
+        assert_eq!(parse_source("a, b"), tuple(vec![name("a"), name("b")]));
+        assert_eq!(
+            parse_source("(a, b, c)"),
+            tuple(vec![name("a"), name("b"), name("c")]),
+        );
+        assert_eq!(
+            parse_source("a, (b, c,)"),
+            tuple(vec![name("a"), tuple(vec![name("b"), name("c")])]),
+        );
+        assert_eq!(
+            parse_source("a,(b,c),d"),
+            tuple(vec![
+                name("a"),
+                tuple(vec![name("b"), name("c")]),
+                name("d"),
             ]),
-        ]);
-        assert_eq!(parse(input).unwrap(), output);
-        let input = lexer::tokenize("a,(b,c),d").unwrap();
-        let output = AST::Tuple(vec![
-            AST::Const(Const::Name(String::from("a"))),
-            AST::Tuple(vec![
-                AST::Const(Const::Name(String::from("b"))),
-                AST::Const(Const::Name(String::from("c"))),
-            ]),
-            AST::Const(Const::Name(String::from("d"))),
-        ]);
-        assert_eq!(parse(input).unwrap(), output);
-        let input = lexer::tokenize("a, b, (), ").unwrap();
-        let output = AST::Tuple(vec![
-            AST::Const(Const::Name(String::from("a"))),
-            AST::Const(Const::Name(String::from("b"))),
-            AST::Const(Const::Unit),
-        ]);
-        assert_eq!(parse(input).unwrap(), output);
-        let input = lexer::tokenize("f(x, y)").unwrap();
-        let output = AST::Call {
-            left: Box::new(AST::Const(Const::Name(String::from("f")))),
-            right: Box::new(AST::Tuple(vec![
-                AST::Const(Const::Name(String::from("x"))),
-                AST::Const(Const::Name(String::from("y"))),
-            ])),
-        };
-        assert_eq!(parse(input).unwrap(), output);
-        let input = lexer::tokenize("(x, y)f").unwrap();
-        let output = AST::Call {
-            left: Box::new(AST::Tuple(vec![
-                AST::Const(Const::Name(String::from("x"))),
-                AST::Const(Const::Name(String::from("y"))),
-            ])),
-            right: Box::new(AST::Const(Const::Name(String::from("f")))),
-        };
-        assert_eq!(parse(input).unwrap(), output);
-        let input = lexer::tokenize("((),), (),").unwrap();
-        let output = AST::Tuple(vec![
-            AST::Tuple(vec![AST::Const(Const::Unit)]),
-            AST::Const(Const::Unit),
-        ]);
-        assert_eq!(parse(input).unwrap(), output);
+        );
+        assert_eq!(
+            parse_source("a, b, (), "),
+            tuple(vec![name("a"), name("b"), tuple(vec![])]),
+        );
+        assert_eq!(
+            parse_source("f(x, y)"),
+            call(name("f"), tuple(vec![name("x"), name("y")])),
+        );
+        assert_eq!(
+            parse_source("(x, y)f"),
+            call(tuple(vec![name("x"), name("y")]), name("f")),
+        );
+        assert_eq!(
+            parse_source("((),), (),"),
+            tuple(vec![tuple(vec![tuple(vec![])]), tuple(vec![])]),
+        );
     }
 }

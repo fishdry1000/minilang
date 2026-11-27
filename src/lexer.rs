@@ -1,16 +1,8 @@
-use crate::error::{LexerError, PositionedString};
+use std::ops::Range;
 
-#[derive(Debug, PartialEq)]
-pub struct Token {
-    position: PositionedString,
-    pub kind: TokenKind,
-}
+use crate::error::{LexerError, Spanned};
 
-impl From<Token> for PositionedString {
-    fn from(value: Token) -> Self {
-        value.position
-    }
-}
+pub type Token = Spanned<TokenKind>;
 
 #[derive(Debug, PartialEq)]
 pub enum TokenKind {
@@ -26,7 +18,6 @@ pub enum Const {
     Float(f64),
     Str(String),
     Name(String),
-    Unit,
 }
 
 const SPLITTERS: &[&str] = &["->", "=", ":", ".", "?"];
@@ -61,8 +52,8 @@ pub fn tokenize(code: &str) -> Result<Vec<Token>, LexerError> {
         fn push<E>(&mut self, f: impl FnOnce(&str) -> Result<TokenKind, E>) -> Result<(), E> {
             if self.start != self.pos {
                 self.result.push(Token {
-                    position: (&*self).into(),
-                    kind: f(self.get_current())?,
+                    span: self.span(),
+                    value: f(self.get_current())?,
                 });
                 self.reset();
             }
@@ -70,7 +61,11 @@ pub fn tokenize(code: &str) -> Result<Vec<Token>, LexerError> {
         }
 
         fn get_current(&self) -> &str {
-            &self.s[self.start..self.pos]
+            &self.s[self.span()]
+        }
+
+        fn span(&self) -> Range<usize> {
+            self.start..self.pos
         }
 
         fn push_name(&mut self) {
@@ -81,13 +76,14 @@ pub fn tokenize(code: &str) -> Result<Vec<Token>, LexerError> {
         fn push_num(&mut self) -> Result<(), LexerError> {
             self.push(|s| s.parse().map(|n| TokenKind::Const(Const::Int(n))))
                 .or_else(|_| self.push(|s| s.parse().map(|n| TokenKind::Const(Const::Float(n)))))
-                .map_err(|_| LexerError::NumError((&*self).into()))
+                .map_err(|_| LexerError::NumError(self.span()))
         }
 
         fn push_str(&mut self) {
+            let content = &self.s[self.start + STR_CHAR.len_utf8()..self.pos - STR_CHAR.len_utf8()];
             self.result.push(Token {
-                position: (&*self).into(),
-                kind: TokenKind::Const(Const::Str(String::from(self.get_current()))),
+                span: self.span(),
+                value: TokenKind::Const(Const::Str(String::from(content))),
             });
             self.reset();
         }
@@ -111,12 +107,6 @@ pub fn tokenize(code: &str) -> Result<Vec<Token>, LexerError> {
 
         fn reset(&mut self) {
             self.start = self.pos;
-        }
-    }
-
-    impl<'a> From<&Eater<'a>> for PositionedString {
-        fn from(value: &Eater<'a>) -> Self {
-            PositionedString(String::from(value.get_current()), value.start..value.pos)
         }
     }
 
@@ -149,7 +139,6 @@ pub fn tokenize(code: &str) -> Result<Vec<Token>, LexerError> {
                     eater.status = Status::Num;
                 } else if c == STR_CHAR {
                     eater.step(c.len_utf8());
-                    eater.reset();
                     eater.status = Status::Str;
                 } else {
                     eater.status = Status::Name;
@@ -195,9 +184,8 @@ pub fn tokenize(code: &str) -> Result<Vec<Token>, LexerError> {
             Status::Str => {
                 if c == STR_CHAR {
                     eater.status = Status::Normal;
-                    eater.push_str();
                     eater.step(c.len_utf8());
-                    eater.reset();
+                    eater.push_str();
                 } else {
                     eater.step(c.len_utf8());
                 }
@@ -210,7 +198,7 @@ pub fn tokenize(code: &str) -> Result<Vec<Token>, LexerError> {
         Status::Name => eater.push_name(),
         Status::InlineComment => (),
         Status::Num => eater.push_num()?,
-        Status::Str => return Err(LexerError::StrError((&eater).into())),
+        Status::Str => return Err(LexerError::StrError(eater.span())),
     }
 
     Ok(eater.get())
@@ -224,34 +212,50 @@ mod tests {
         tokenize(input)
             .unwrap()
             .into_iter()
-            .map(|t| t.kind)
+            .map(|t| t.value)
             .collect()
+    }
+
+    fn name(name: &str) -> TokenKind {
+        TokenKind::Const(Const::Name(String::from(name)))
+    }
+
+    fn string(string: &str) -> TokenKind {
+        TokenKind::Const(Const::Str(String::from(string)))
+    }
+
+    fn int(int: i64) -> TokenKind {
+        TokenKind::Const(Const::Int(int))
+    }
+
+    fn float(float: f64) -> TokenKind {
+        TokenKind::Const(Const::Float(float))
     }
 
     #[test]
     fn tokenize_basic() {
         let input = "a b\nc  \t d 33 e(->\t):f,.xxxxxx?\nx0.14 0.14\"a\"// \"abc";
         let output = vec![
-            TokenKind::Const(Const::Name(String::from("a"))),
-            TokenKind::Const(Const::Name(String::from("b"))),
-            TokenKind::Const(Const::Name(String::from("c"))),
-            TokenKind::Const(Const::Name(String::from("d"))),
-            TokenKind::Const(Const::Int(33)),
-            TokenKind::Const(Const::Name(String::from("e"))),
+            name("a"),
+            name("b"),
+            name("c"),
+            name("d"),
+            int(33),
+            name("e"),
             TokenKind::Open,
-            TokenKind::Const(Const::Name(String::from("->"))),
+            name("->"),
             TokenKind::Close,
-            TokenKind::Const(Const::Name(String::from(":"))),
-            TokenKind::Const(Const::Name(String::from("f"))),
+            name(":"),
+            name("f"),
             TokenKind::Separator,
-            TokenKind::Const(Const::Name(String::from("."))),
-            TokenKind::Const(Const::Name(String::from("xxxxxx"))),
-            TokenKind::Const(Const::Name(String::from("?"))),
-            TokenKind::Const(Const::Name(String::from("x0"))),
-            TokenKind::Const(Const::Name(String::from("."))),
-            TokenKind::Const(Const::Int(14)),
-            TokenKind::Const(Const::Float(0.14)),
-            TokenKind::Const(Const::Str(String::from("a"))),
+            name("."),
+            name("xxxxxx"),
+            name("?"),
+            name("x0"),
+            name("."),
+            int(14),
+            float(0.14),
+            string("a"),
         ];
         assert_eq!(get_token_kind(input), output);
     }
@@ -272,18 +276,10 @@ mod tests {
     #[test]
     fn tokenize_inline_comment() {
         let input = "aa bb.c// some // comment";
-        let output = vec![
-            TokenKind::Const(Const::Name(String::from("aa"))),
-            TokenKind::Const(Const::Name(String::from("bb"))),
-            TokenKind::Const(Const::Name(String::from("."))),
-            TokenKind::Const(Const::Name(String::from("c"))),
-        ];
+        let output = vec![name("aa"), name("bb"), name("."), name("c")];
         assert_eq!(get_token_kind(input), output);
         let input = "aa///comment\nbb//another\n//->.?";
-        let output = vec![
-            TokenKind::Const(Const::Name(String::from("aa"))),
-            TokenKind::Const(Const::Name(String::from("bb"))),
-        ];
+        let output = vec![name("aa"), name("bb")];
         assert_eq!(get_token_kind(input), output);
         let input = "//only\n//comment";
         let output = vec![];
@@ -293,35 +289,32 @@ mod tests {
     #[test]
     fn tokenize_num() {
         let input = "1";
-        let output = vec![TokenKind::Const(Const::Int(1))];
+        let output = vec![int(1)];
         assert_eq!(get_token_kind(input), output);
         let input = "001 002";
-        let output = vec![
-            TokenKind::Const(Const::Int(1)),
-            TokenKind::Const(Const::Int(2)),
-        ];
+        let output = vec![int(1), int(2)];
         assert_eq!(get_token_kind(input), output);
         let input = "1.1";
-        let output = vec![TokenKind::Const(Const::Float(1.1))];
+        let output = vec![float(1.1)];
         assert_eq!(get_token_kind(input), output);
     }
 
     #[test]
     fn tokenize_str() {
         let input = r#"" 1.1" "#;
-        let output = vec![TokenKind::Const(Const::Str(String::from(" 1.1")))];
+        let output = vec![string(" 1.1")];
         assert_eq!(get_token_kind(input), output);
         let input = r#""""#;
-        let output = vec![TokenKind::Const(Const::Str(String::from("")))];
+        let output = vec![string("")];
         assert_eq!(get_token_kind(input), output);
         let input = r#""2"z""?"
 az""#;
         let output = vec![
-            TokenKind::Const(Const::Str(String::from("2"))),
-            TokenKind::Const(Const::Name(String::from("z"))),
-            TokenKind::Const(Const::Str(String::from(""))),
-            TokenKind::Const(Const::Name(String::from("?"))),
-            TokenKind::Const(Const::Str(String::from("\naz"))),
+            string("2"),
+            name("z"),
+            string(""),
+            name("?"),
+            string("\naz"),
         ];
         assert_eq!(get_token_kind(input), output);
     }

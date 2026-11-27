@@ -1,6 +1,10 @@
 use std::sync::atomic::AtomicUsize;
 
-use crate::{lexer::Const, parser::AST};
+use crate::{
+    error::TypeError,
+    lexer::Const,
+    parser::{AST, ASTKind},
+};
 
 #[derive(Debug)]
 pub enum TypedAST {
@@ -8,20 +12,29 @@ pub enum TypedAST {
         left: Box<TypedAST>,
         right: Box<TypedAST>,
     },
-    Const(Type),
+    Transfer {
+        from: Box<TypedAST>,
+        to: Box<TypedAST>,
+    },
+    Const(ConstType),
     Tuple(Vec<TypedAST>),
-}
-
-#[derive(Debug)]
-pub enum Type {
-    Int,
-    Float,
-    Str,
-    Unit,
     TypeVar(TypeVar),
 }
 
+impl TypedAST {
+    fn expand(self) -> Result<Self, TypeError> {
+        Ok(self)
+    }
+}
+
 #[derive(Debug)]
+pub enum ConstType {
+    Int,
+    Float,
+    Str,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct TypeVar(usize);
 
 static TYPE_VAR_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -31,25 +44,37 @@ impl TypeVar {
     }
 }
 
-impl From<&Const> for Type {
-    fn from(value: &Const) -> Self {
-        match value {
-            Const::Int(_) => Type::Int,
-            Const::Float(_) => Type::Float,
-            Const::Str(_) => Type::Str,
-            Const::Name(_) => Type::TypeVar(TypeVar::new()),
-            Const::Unit => Type::Unit,
-        }
+pub fn check(code: &AST) -> TypedAST {
+    build(code)
+}
+
+fn get_builtin_type(name: &str) -> Option<TypedAST> {
+    match name {
+        "*" => Some(TypedAST::Transfer {
+            from: Box::new(TypedAST::Tuple(vec![
+                TypedAST::Const(ConstType::Int),
+                TypedAST::Const(ConstType::Int),
+            ])),
+            to: Box::new(TypedAST::Const(ConstType::Int)),
+        }),
+        _ => None,
     }
 }
 
-pub fn check(code: &AST) -> TypedAST {
-    match code {
-        AST::Call { left, right } => TypedAST::Call {
-            left: Box::new(check(left)),
-            right: Box::new(check(right)),
+fn build(code: &AST) -> TypedAST {
+    match &code.value {
+        ASTKind::Call { left, right } => TypedAST::Call {
+            left: Box::new(build(left)),
+            right: Box::new(build(right)),
         },
-        AST::Const(code) => TypedAST::Const(Type::from(code)),
-        AST::Tuple(asts) => TypedAST::Tuple(asts.iter().map(|e| check(e)).collect()),
+        ASTKind::Const(code) => match code {
+            Const::Int(_) => TypedAST::Const(ConstType::Int),
+            Const::Float(_) => TypedAST::Const(ConstType::Float),
+            Const::Str(_) => TypedAST::Const(ConstType::Str),
+            Const::Name(name) => {
+                get_builtin_type(name).unwrap_or_else(|| TypedAST::TypeVar(TypeVar::new()))
+            }
+        },
+        ASTKind::Tuple(asts) => TypedAST::Tuple(asts.iter().map(|e| build(e)).collect()),
     }
 }
