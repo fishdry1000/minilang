@@ -12,6 +12,11 @@ fn main() -> anyhow::Result<()> {
     let ast = parser::parse(tokens)?;
 
     println!("{ast:?}");
+    println!("================================================");
+
+    let typed_ast = type_checker::check(&ast);
+
+    println!("{typed_ast:?}");
 
     Ok(())
 }
