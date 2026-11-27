@@ -16,6 +16,7 @@ impl From<Token> for PositionedString {
 pub enum TokenKind {
     Open,
     Close,
+    Separator,
     Const(Const),
 }
 
@@ -25,12 +26,14 @@ pub enum Const {
     Float(f64),
     Str(String),
     Name(String),
+    Unit,
 }
 
-const SPLITTERS: &[&str] = &["->", "=", ":", ",", ".", "?"];
+const SPLITTERS: &[&str] = &["->", "=", ":", ".", "?"];
 const OPEN_CHAR: char = '(';
 const CLOSE_CHAR: char = ')';
 const STR_CHAR: char = '"';
+const SEPARATOR_CHAR: char = ',';
 const INLINE_COMMENT_STARTER: &str = "//";
 
 pub fn tokenize(code: &str) -> Result<Vec<Token>, LexerError> {
@@ -137,6 +140,9 @@ pub fn tokenize(code: &str) -> Result<Vec<Token>, LexerError> {
                 } else if c == CLOSE_CHAR {
                     eater.step(c.len_utf8());
                     eater.push::<()>(|_| Ok(TokenKind::Close)).unwrap();
+                } else if c == SEPARATOR_CHAR {
+                    eater.step(c.len_utf8());
+                    eater.push::<()>(|_| Ok(TokenKind::Separator)).unwrap();
                 } else if eater.get_left().starts_with(INLINE_COMMENT_STARTER) {
                     eater.status = Status::InlineComment;
                 } else if c.is_ascii_digit() {
@@ -154,6 +160,7 @@ pub fn tokenize(code: &str) -> Result<Vec<Token>, LexerError> {
                     || c == OPEN_CHAR
                     || c == CLOSE_CHAR
                     || c == STR_CHAR
+                    || c == SEPARATOR_CHAR
                     || eater.get_left().starts_with(INLINE_COMMENT_STARTER)
                 {
                     eater.push_name();
@@ -236,7 +243,7 @@ mod tests {
             TokenKind::Close,
             TokenKind::Const(Const::Name(String::from(":"))),
             TokenKind::Const(Const::Name(String::from("f"))),
-            TokenKind::Const(Const::Name(String::from(","))),
+            TokenKind::Separator,
             TokenKind::Const(Const::Name(String::from("."))),
             TokenKind::Const(Const::Name(String::from("xxxxxx"))),
             TokenKind::Const(Const::Name(String::from("?"))),

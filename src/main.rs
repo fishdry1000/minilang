@@ -1,6 +1,7 @@
 mod error;
 mod lexer;
 mod parser;
+mod type_checker;
 use std::fs;
 
 fn main() -> anyhow::Result<()> {

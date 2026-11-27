@@ -20,4 +20,6 @@ pub enum ParserError {
     NotClosedError(PositionedString),
     #[error("extra close: {0:?}")]
     ExtraCloseError(PositionedString),
+    #[error("nothing to separate: {0:?}")]
+    NothingToSeparate(PositionedString),
 }
