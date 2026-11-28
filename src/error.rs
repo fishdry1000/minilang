@@ -28,4 +28,10 @@ pub enum ParserError {
 }
 
 #[derive(Debug, Error)]
-pub enum TypeError {}
+pub enum TypeError {
+    #[error("mismatched type: except: {except:?}, received: {received:?}")]
+    MismatchedTypeError {
+        except: crate::type_checker::Type,
+        received: crate::type_checker::Type,
+    },
+}

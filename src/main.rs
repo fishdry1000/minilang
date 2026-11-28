@@ -1,3 +1,4 @@
+mod algorithm;
 mod error;
 mod lexer;
 mod parser;
@@ -14,7 +15,7 @@ fn main() -> anyhow::Result<()> {
     println!("{ast:?}");
     println!("================================================");
 
-    let typed_ast = type_checker::check(&ast);
+    let typed_ast = type_checker::check(&ast)?;
 
     println!("{typed_ast:#?}");
 
